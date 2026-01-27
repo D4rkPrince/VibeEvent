@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VibeEvent — документы</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="title-block">
+          <h1>Мои документы</h1>
+          <p>Контроль сроков и напоминания</p>
+          <span class="status-badge" id="apiStatus">API: проверка...</span>
+        </div>
+        <div class="top-actions">
+          <button id="reminderButton" class="ghost">
+            <span class="icon">🔔</span>
+            Отправить напоминание
+          </button>
+          <button id="clearAllButton" class="danger">Очистить все</button>
+          <button id="openAddModal" class="primary">+ Добавить документ</button>
+        </div>
+      </header>
+
+      <section class="stats">
+        <button class="stat-card" data-filter="expired">
+          <div>
+            <p>Истекли</p>
+            <h3 id="statExpired">0</h3>
+          </div>
+          <div class="stat-icon danger">!</div>
+        </button>
+        <button class="stat-card" data-filter="soon">
+          <div>
+            <p>До 30 дней</p>
+            <h3 id="statSoon">0</h3>
+          </div>
+          <div class="stat-icon warn">⏰</div>
+        </button>
+        <button class="stat-card" data-filter="mid">
+          <div>
+            <p>30–60 дней</p>
+            <h3 id="statMid">0</h3>
+          </div>
+          <div class="stat-icon warn">⏰</div>
+        </button>
+        <button class="stat-card" data-filter="active">
+          <div>
+            <p>Активны</p>
+            <h3 id="statActive">0</h3>
+          </div>
+          <div class="stat-icon ok">✓</div>
+        </button>
+      </section>
+
+      <section class="search-row">
+        <span class="search-icon">🔍</span>
+        <input
+          id="searchInput"
+          type="text"
+          placeholder="Поиск по названию или типу..."
+        />
+        <button id="refreshButton" class="ghost">Обновить список</button>
+      </section>
+
+      <section class="documents-section">
+        <div id="documentsGrid" class="documents-grid"></div>
+        <div id="emptyState" class="empty-state">Документы не найдены</div>
+      </section>
+    </div>
+
+    <div class="modal" id="addModal" aria-hidden="true">
+      <div class="modal-backdrop" data-close="addModal"></div>
+      <div class="modal-card">
+        <button class="modal-close" data-close="addModal">×</button>
+        <h2>Добавить документ</h2>
+        <form id="addForm">
+          <label>
+            Название
+            <input name="title" placeholder="Паспорт РФ" required />
+          </label>
+          <label>
+            Тип
+            <input name="doc_type" placeholder="Паспорт" required />
+          </label>
+          <label>
+            Дата окончания
+            <input name="expiry_date" type="date" required />
+          </label>
+          <button type="submit" class="primary">Добавить</button>
+        </form>
+        <div class="hint" id="addMessage"></div>
+      </div>
+    </div>
+
+    <div class="modal" id="historyModal" aria-hidden="true">
+      <div class="modal-backdrop" data-close="historyModal"></div>
+      <div class="modal-card wide">
+        <button class="modal-close" data-close="historyModal">×</button>
+        <h2>История обновлений</h2>
+        <div id="historyList" class="history-list">История не загружена</div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
