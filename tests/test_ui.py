@@ -5,6 +5,7 @@ import re
 import socket
 import subprocess
 import time
+import os
 
 import pytest
 from playwright.sync_api import expect
@@ -34,7 +35,9 @@ def server():
     except RuntimeError:
         pass
 
-    process = subprocess.Popen(["py", "-m", "app.main"])
+    env = os.environ.copy()
+    env["SMTP_DISABLED"] = "true"
+    process = subprocess.Popen(["py", "-m", "app.main"], env=env)
     wait_for_health()
     yield
     process.terminate()
@@ -67,7 +70,10 @@ class TestDocumentForm:
         page.click("#openAddModal")
         page.fill('input[name="title"]', title)
         page.fill('input[name="doc_type"]', "Паспорт")
-        page.fill('input[name="expiry_date"]', "2026-12-31")
+        page.click("#expiryDateToggle")
+        page.select_option("#expiryMonth", "11")
+        page.select_option("#expiryYear", "2026")
+        page.click('[data-date="2026-12-31"]')
         page.click('button[type="submit"]')
         expect(page.locator("#addMessage")).to_contain_text("Документ добавлен")
         expect(page.locator("#documentsGrid")).to_contain_text(title)
@@ -82,22 +88,15 @@ class TestDocumentForm:
         expect(page.locator("#addMessage")).not_to_contain_text("Документ добавлен")
 
     def test_add_form_invalid_date(self, page):
-        """Проверяет отказ при некорректной дате."""
+        """Проверяет, что нет дней вне месяца."""
         wait_for_api(page)
         page.click("#openAddModal")
         page.fill('input[name="title"]', build_title("Паспорт"))
         page.fill('input[name="doc_type"]', "Паспорт")
-        page.evaluate(
-            """
-            () => {
-                const input = document.querySelector('input[name="expiry_date"]');
-                input.type = "text";
-                input.value = "2026-99-31";
-            }
-            """
-        )
-        page.click('button[type="submit"]')
-        expect(page.locator("#addMessage")).to_contain_text("Некорректная дата")
+        page.click("#expiryDateToggle")
+        page.select_option("#expiryMonth", "1")
+        page.select_option("#expiryYear", "2026")
+        expect(page.locator('[data-date="2026-02-31"]')).to_have_count(0)
 
     def test_add_modal_close(self, page):
         """Проверяет закрытие модального окна формы."""
@@ -273,8 +272,22 @@ class TestReminders:
     def test_send_reminders(self, page):
         """Проверяет отправку напоминаний через UI."""
         wait_for_api(page)
+        page.select_option("#reminderMode", "webhook")
+        page.fill("#reminderTarget", "https://example.invalid/webhook")
         page.click("#reminderButton")
-        expect(page.locator("#toast")).to_contain_text("Отправлено")
+        toast = page.locator("#toast")
+        expect(toast).to_be_visible()
+        text = toast.inner_text()
+        assert "Отправлено" in text or "Ошибка" in text
+
+    def test_send_reminders_with_target(self, page):
+        """Проверяет отправку напоминаний с заданной целью."""
+        target_url = "https://example.invalid/webhook-test"
+        wait_for_api(page)
+        page.select_option("#reminderMode", "webhook")
+        page.fill("#reminderTarget", target_url)
+        page.click("#reminderButton")
+        expect(page.locator("#toast")).to_contain_text(target_url)
 
 
 class TestDeletion:

@@ -1,17 +1,37 @@
 """API и UI сервиса контроля документов."""
 
 import os
+import smtplib
+import time
 from datetime import date, datetime, timedelta
+from email.message import EmailMessage
 from pathlib import Path
 from typing import List, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.database import get_connection, init_db
+
+
+def _load_env_file(path: Path) -> None:
+    """Загружает переменные окружения из .env, если он есть."""
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+_load_env_file(Path(__file__).resolve().parent.parent / ".env")
 
 app = FastAPI(title="Сервис контроля документов")
 static_dir = Path(__file__).resolve().parent / "static"
@@ -116,10 +136,73 @@ def _write_outbox(message: str) -> None:
         handle.write(message + "\n")
 
 
-def _send_email(test_email: str, message: str) -> str:
-    """Имитирует отправку email через запись в outbox."""
-    _write_outbox(f"[EMAIL] to={test_email} {message}")
-    return f"email:{test_email}"
+def _bool_env(value: Optional[str]) -> bool:
+    """Преобразует строковое значение окружения в bool."""
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+_RATE_STATE: dict[tuple[str, str], list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    """Определяет IP клиента для rate limit."""
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit(
+    request: Request, scope: str, limit: int, window_seconds: int = 60
+) -> None:
+    """Проверяет лимит запросов на клиента для выбранной области."""
+    now = time.time()
+    key = (_client_ip(request), scope)
+    timestamps = _RATE_STATE.get(key, [])
+    fresh = [stamp for stamp in timestamps if now - stamp < window_seconds]
+    if len(fresh) >= limit:
+        raise HTTPException(status_code=429, detail="Слишком много запросов")
+    fresh.append(now)
+    _RATE_STATE[key] = fresh
+
+
+def _send_email(recipient: str, message: str) -> str:
+    """Отправляет email через SMTP или пишет в outbox."""
+    if _bool_env(os.getenv("SMTP_DISABLED")):
+        _write_outbox(f"[EMAIL] to={recipient} {message}")
+        return f"email:{recipient}"
+    smtp_host = os.getenv("SMTP_HOST")
+    if not smtp_host:
+        _write_outbox(f"[EMAIL] to={recipient} {message}")
+        return f"email:{recipient}"
+
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    smtp_from = os.getenv("SMTP_FROM", smtp_user or "no-reply@localhost")
+    smtp_tls = _bool_env(os.getenv("SMTP_TLS", "true"))
+    smtp_ssl = _bool_env(os.getenv("SMTP_SSL", "false"))
+
+    email_message = EmailMessage()
+    email_message["From"] = smtp_from
+    email_message["To"] = recipient
+    email_message["Subject"] = "Напоминание о документе"
+    email_message.set_content(message)
+
+    try:
+        if smtp_ssl:
+            server: smtplib.SMTP = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
+        else:
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
+
+        with server:
+            if smtp_tls and not smtp_ssl:
+                server.starttls()
+            if smtp_user and smtp_password:
+                server.login(smtp_user, smtp_password)
+            server.send_message(email_message)
+    except smtplib.SMTPException as error:
+        raise HTTPException(status_code=500, detail=f"SMTP ошибка: {error}") from error
+
+    _write_outbox(f"[EMAIL:SMTP] to={recipient} {message}")
+    return f"email:{recipient}"
 
 
 def _send_webhook(webhook_url: str, message: str) -> str:
@@ -148,8 +231,11 @@ def index() -> HTMLResponse:
 
 
 @app.post("/documents", response_model=DocumentOut)
-def create_document(payload: DocumentCreate) -> DocumentOut:
+def create_document(payload: DocumentCreate, request: Request) -> DocumentOut:
     """Создает документ с датой окончания и типом."""
+    _rate_limit(
+        request, "documents", int(os.getenv("RATE_LIMIT_DOCUMENTS", "200"))
+    )
     now = _now()
     with get_connection() as connection:
         cursor = connection.cursor()
@@ -203,8 +289,13 @@ def list_expiring_documents(days: int = Query(30, ge=1, le=365)) -> List[Documen
 
 
 @app.post("/documents/{document_id}/renew", response_model=DocumentOut)
-def renew_document(document_id: int, payload: DocumentUpdate) -> DocumentOut:
+def renew_document(
+    document_id: int, payload: DocumentUpdate, request: Request
+) -> DocumentOut:
     """Обновляет срок действия документа и пишет историю."""
+    _rate_limit(
+        request, "documents", int(os.getenv("RATE_LIMIT_DOCUMENTS", "200"))
+    )
     now = _now()
     with get_connection() as connection:
         cursor = connection.cursor()
@@ -235,8 +326,11 @@ def renew_document(document_id: int, payload: DocumentUpdate) -> DocumentOut:
 
 
 @app.delete("/documents/{document_id}")
-def delete_document(document_id: int) -> dict:
+def delete_document(document_id: int, request: Request) -> dict:
     """Удаляет документ и связанную историю обновлений."""
+    _rate_limit(
+        request, "documents", int(os.getenv("RATE_LIMIT_DOCUMENTS", "200"))
+    )
     with get_connection() as connection:
         cursor = connection.cursor()
         cursor.execute("SELECT 1 FROM documents WHERE id = ?", (document_id,))
@@ -249,14 +343,17 @@ def delete_document(document_id: int) -> dict:
 
 
 @app.post("/documents/{document_id}/delete")
-def delete_document_post(document_id: int) -> dict:
+def delete_document_post(document_id: int, request: Request) -> dict:
     """Удаляет документ через POST для совместимости."""
-    return delete_document(document_id)
+    return delete_document(document_id, request)
 
 
 @app.post("/documents/clear")
-def clear_documents() -> dict:
+def clear_documents(request: Request) -> dict:
     """Удаляет все документы и историю обновлений."""
+    _rate_limit(
+        request, "documents", int(os.getenv("RATE_LIMIT_DOCUMENTS", "200"))
+    )
     with get_connection() as connection:
         cursor = connection.cursor()
         cursor.execute("SELECT COUNT(*) FROM documents")
@@ -289,10 +386,15 @@ def get_document_history(document_id: int) -> List[HistoryOut]:
 
 @app.post("/reminders/send", response_model=ReminderResult)
 def send_reminders(
+    request: Request,
     days: int = Query(30, ge=1, le=365),
     mode: Optional[str] = Query(None, description="email or webhook"),
+    target: Optional[str] = Query(None, description="email or webhook target"),
 ) -> ReminderResult:
     """Отправляет тестовые напоминания по истекающим документам."""
+    _rate_limit(
+        request, "reminders", int(os.getenv("RATE_LIMIT_REMINDERS", "20"))
+    )
     target_mode = (mode or "email").lower()
     if target_mode not in {"email", "webhook"}:
         raise HTTPException(
@@ -313,17 +415,25 @@ def send_reminders(
 
     details = []
     if target_mode == "email":
-        target = os.getenv("REMINDER_TEST_EMAIL", "test@example.com")
+        if target and ("@" not in target or " " in target):
+            raise HTTPException(status_code=400, detail="Некорректный email")
+        target = target or os.getenv("REMINDER_TEST_EMAIL", "test@example.com")
+        smtp_enabled = bool(os.getenv("SMTP_HOST"))
         log_path = str(Path.cwd().joinpath("data", "outbox.log"))
         test_email = target
         for row in rows:
             message = f"Документ {row['title']} истекает {row['expiry_date']}"
             details.append(_send_email(test_email, message))
+        target_label = target if smtp_enabled else f"{target} ({log_path})"
         return ReminderResult(
-            sent=len(rows), mode="email", target=f"{target} ({log_path})", details=details
+            sent=len(rows), mode="email", target=target_label, details=details
         )
 
-    webhook_url = os.getenv("REMINDER_WEBHOOK_URL", "https://example.invalid/webhook")
+    if target and not target.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Некорректный webhook URL")
+    webhook_url = target or os.getenv(
+        "REMINDER_WEBHOOK_URL", "https://example.invalid/webhook"
+    )
     target = webhook_url
     for row in rows:
         message = f"Документ {row['title']} истекает {row['expiry_date']}"

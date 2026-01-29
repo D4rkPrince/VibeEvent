@@ -4,11 +4,19 @@ const emptyState = document.getElementById("emptyState");
 const refreshButton = document.getElementById("refreshButton");
 const searchInput = document.getElementById("searchInput");
 const reminderButton = document.getElementById("reminderButton");
+const reminderMode = document.getElementById("reminderMode");
+const reminderTarget = document.getElementById("reminderTarget");
 const clearAllButton = document.getElementById("clearAllButton");
 const openAddModalButton = document.getElementById("openAddModal");
 const addModal = document.getElementById("addModal");
 const addForm = document.getElementById("addForm");
 const addMessage = document.getElementById("addMessage");
+const expiryDateInput = document.getElementById("expiryDateInput");
+const expiryDateToggle = document.getElementById("expiryDateToggle");
+const expiryCalendar = document.getElementById("expiryCalendar");
+const expiryMonth = document.getElementById("expiryMonth");
+const expiryYear = document.getElementById("expiryYear");
+const expiryDays = document.getElementById("expiryDays");
 const historyModal = document.getElementById("historyModal");
 const historyList = document.getElementById("historyList");
 const toast = document.getElementById("toast");
@@ -19,6 +27,20 @@ const statActive = document.getElementById("statActive");
 
 let documents = [];
 let currentFilter = "all";
+const MONTHS_RU = [
+  "Январь",
+  "Февраль",
+  "Март",
+  "Апрель",
+  "Май",
+  "Июнь",
+  "Июль",
+  "Август",
+  "Сентябрь",
+  "Октябрь",
+  "Ноябрь",
+  "Декабрь",
+];
 
 const formatShortDate = (value) => {
   if (!value) return "-";
@@ -210,7 +232,13 @@ const loadDocuments = async () => {
 
 const sendReminder = async () => {
   try {
-    const data = await fetchJson("/reminders/send?days=30&mode=email", {
+    const mode = reminderMode?.value || "email";
+    const targetValue = reminderTarget?.value?.trim() || "";
+    const params = new URLSearchParams({ days: "30", mode });
+    if (targetValue) {
+      params.set("target", targetValue);
+    }
+    const data = await fetchJson(`/reminders/send?${params.toString()}`, {
       method: "POST",
     });
     showToast(`Отправлено: ${data.sent}. Адрес: ${data.target}`);
@@ -272,9 +300,129 @@ const closeModal = (modal) => {
   modal.setAttribute("aria-hidden", "true");
 };
 
+const toIsoDate = (year, monthIndex, day) => {
+  const mm = String(monthIndex + 1).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return `${year}-${mm}-${dd}`;
+};
+
+const buildCalendarOptions = () => {
+  if (!expiryMonth || !expiryYear) return;
+  expiryMonth.innerHTML = MONTHS_RU.map(
+    (label, index) => `<option value="${index}">${label}</option>`
+  ).join("");
+  const currentYear = new Date().getFullYear();
+  const years = [];
+  for (let year = currentYear - 5; year <= currentYear + 5; year += 1) {
+    years.push(`<option value="${year}">${year}</option>`);
+  }
+  expiryYear.innerHTML = years.join("");
+};
+
+const renderCalendar = (year, monthIndex) => {
+  if (!expiryDays) return;
+  const firstDay = new Date(year, monthIndex, 1);
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const startIndex = (firstDay.getDay() + 6) % 7;
+  const today = new Date();
+  const selectedValue = expiryDateInput?.value;
+
+  const cells = [];
+  for (let i = 0; i < startIndex; i += 1) {
+    cells.push('<div class="calendar-empty"></div>');
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const iso = toIsoDate(year, monthIndex, day);
+    const isToday =
+      day === today.getDate() &&
+      monthIndex === today.getMonth() &&
+      year === today.getFullYear();
+    const isSelected = selectedValue === iso;
+    const classes = ["calendar-day"];
+    if (isToday) classes.push("is-today");
+    if (isSelected) classes.push("is-selected");
+    cells.push(
+      `<button type="button" class="${classes.join(" ")}" data-date="${iso}">${day}</button>`
+    );
+  }
+  expiryDays.innerHTML = cells.join("");
+};
+
+const openCalendar = () => {
+  if (!expiryCalendar || !expiryMonth || !expiryYear) return;
+  const baseDate = expiryDateInput?.value
+    ? new Date(expiryDateInput.value)
+    : new Date();
+  expiryMonth.value = String(baseDate.getMonth());
+  expiryYear.value = String(baseDate.getFullYear());
+  renderCalendar(baseDate.getFullYear(), baseDate.getMonth());
+  expiryCalendar.classList.add("open");
+  expiryCalendar.setAttribute("aria-hidden", "false");
+};
+
+const closeCalendar = () => {
+  if (!expiryCalendar) return;
+  expiryCalendar.classList.remove("open");
+  expiryCalendar.setAttribute("aria-hidden", "true");
+};
+
+const initCalendar = () => {
+  if (!expiryDateInput || !expiryCalendar) return;
+  buildCalendarOptions();
+
+  expiryDateInput.addEventListener("click", () => {
+    openCalendar();
+  });
+  expiryDateToggle?.addEventListener("click", () => {
+    openCalendar();
+  });
+  expiryMonth?.addEventListener("change", () => {
+    renderCalendar(Number(expiryYear.value), Number(expiryMonth.value));
+  });
+  expiryYear?.addEventListener("change", () => {
+    renderCalendar(Number(expiryYear.value), Number(expiryMonth.value));
+  });
+  expiryCalendar.addEventListener("click", (event) => {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.matches("[data-date]")) {
+      const selected = target.getAttribute("data-date");
+      if (selected && expiryDateInput) {
+        expiryDateInput.value = selected;
+        closeCalendar();
+      }
+    }
+    if (target instanceof HTMLElement && target.matches("[data-cal-nav]")) {
+      const direction = Number(target.getAttribute("data-cal-nav"));
+      const currentMonth = Number(expiryMonth.value);
+      const currentYear = Number(expiryYear.value);
+      const next = new Date(currentYear, currentMonth + direction, 1);
+      expiryMonth.value = String(next.getMonth());
+      expiryYear.value = String(next.getFullYear());
+      renderCalendar(next.getFullYear(), next.getMonth());
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!expiryCalendar.classList.contains("open")) return;
+    const target = event.target;
+    if (
+      target instanceof Node &&
+      !expiryCalendar.contains(target) &&
+      !expiryDateInput.contains(target) &&
+      !expiryDateToggle?.contains(target)
+    ) {
+      closeCalendar();
+    }
+  });
+};
+
 openAddModalButton.addEventListener("click", () => {
   addMessage.textContent = "";
   addForm.reset();
+  if (expiryDateInput) {
+    expiryDateInput.value = "";
+  }
   openModal(addModal);
 });
 
@@ -369,3 +517,4 @@ clearAllButton.addEventListener("click", async () => {
 
 checkHealth();
 loadDocuments();
+initCalendar();

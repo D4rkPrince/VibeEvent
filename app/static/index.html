@@ -15,6 +15,18 @@
           <span class="status-badge" id="apiStatus">API: проверка...</span>
         </div>
         <div class="top-actions">
+          <div class="reminder-controls">
+            <select id="reminderMode" aria-label="Режим напоминаний">
+              <option value="email">Email</option>
+              <option value="webhook">Webhook</option>
+            </select>
+            <input
+              id="reminderTarget"
+              type="text"
+              placeholder="email или URL (необязательно)"
+              aria-label="Цель напоминаний"
+            />
+          </div>
           <button id="reminderButton" class="ghost">
             <span class="icon">🔔</span>
             Отправить напоминание
@@ -87,7 +99,50 @@
           </label>
           <label>
             Дата окончания
-            <input name="expiry_date" type="date" required />
+            <div class="date-picker">
+              <input
+                id="expiryDateInput"
+                name="expiry_date"
+                type="text"
+                placeholder="YYYY-MM-DD"
+                readonly
+                required
+              />
+              <button
+                id="expiryDateToggle"
+                type="button"
+                class="calendar-toggle"
+                aria-label="Открыть календарь"
+              >
+                📅
+              </button>
+              <div
+                id="expiryCalendar"
+                class="calendar-popup"
+                aria-hidden="true"
+              >
+                <div class="calendar-header">
+                  <button type="button" class="cal-nav" data-cal-nav="-1">
+                    ‹
+                  </button>
+                  <select id="expiryMonth"></select>
+                  <select id="expiryYear"></select>
+                  <button type="button" class="cal-nav" data-cal-nav="1">
+                    ›
+                  </button>
+                </div>
+                <div class="calendar-weekdays">
+                  <span>Пн</span>
+                  <span>Вт</span>
+                  <span>Ср</span>
+                  <span>Чт</span>
+                  <span>Пт</span>
+                  <span>Сб</span>
+                  <span>Вс</span>
+                </div>
+                <div class="calendar-grid" id="expiryDays"></div>
+              </div>
+            </div>
           </label>
           <button type="submit" class="primary">Добавить</button>
         </form>
